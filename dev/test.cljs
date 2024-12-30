@@ -121,6 +121,81 @@
           (expect = "bar" (.-id bar-div))
           (expect = bar-value (.-textContent bar-div)))))))
 
+(check ::render-with-state
+  (let [foo-value-1 (samp :string)
+        foo-value-2 (samp :string)
+        bar-value (samp :string)
+        !state (atom {:foo foo-value-1 :bar bar-value})]
+    (steps
+      (fn [^js/Document doc]
+        (wc/define ::my-component
+          :inputs
+          {:foo (wc/state-in :path [:foo])
+           :bar (wc/state-in :path [:bar])}
+
+          :state
+          !state
+
+          :render
+          (fn [{:keys [foo bar]}]
+            (burp
+              [:div#foo foo]
+              [:div#bar bar])))
+        (vdom/render! (browser-vdom/driver doc) (.-body doc)
+          (burp
+            [::my-component])))
+      (fn [^js/Document doc]
+        (let [foo-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 0))]
+          (expect = "foo" (.-id foo-div))
+          (expect = foo-value-1 (.-textContent foo-div)))
+        (let [bar-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 1))]
+          (expect = "bar" (.-id bar-div))
+          (expect = bar-value (.-textContent bar-div)))
+        
+        (swap! !state assoc :foo foo-value-2))
+      (fn [^js/Document doc]
+        (let [foo-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 0))]
+          (expect = "foo" (.-id foo-div))
+          (expect = foo-value-2 (.-textContent foo-div)))
+        (let [bar-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 1))]
+          (expect = "bar" (.-id bar-div))
+          (expect = bar-value (.-textContent bar-div)))))))
+
+(check ::style
+  (steps
+    (fn [^js/Document doc]
+      (wc/define ::my-component
+        :style "
+          #foo { --name: foo; }
+          #bar { --name: bar; }
+          :host { --name: my-component; }
+        "
+
+        :render
+        (fn []
+          {:style
+           {:--something "something"}
+           
+           :content
+           (burp
+             [:div#foo]
+             [:div#bar])}))
+      (vdom/render! (browser-vdom/driver doc) (.-body doc)
+        (burp
+          [::my-component])))
+    (fn [^js/Document doc]
+      ;; :host selector doesn't work in happy-dom, so disable this bit until it works
+      #_(let [my-component (-> doc .-body .-firstChild)
+            style (.getComputedStyle wc/*window* my-component)]
+        (expect = "something" (.getPropertyValue style "--something"))
+        (expect = "my-component" (.getPropertyValue style "--name")))
+      (let [foo-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 0))
+            style (.getComputedStyle wc/*window* foo-div)]
+        (expect = "foo" (.getPropertyValue style "--name")))
+      (let [bar-div (-> doc .-body .-firstChild .-shadowRoot .-childNodes (.item 1))
+            style (.getComputedStyle wc/*window* bar-div)]
+        (expect = "bar" (.getPropertyValue style "--name"))))))
+
 (defn run
   []
   nil)

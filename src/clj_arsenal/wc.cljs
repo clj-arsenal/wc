@@ -204,16 +204,16 @@
               (let [vdom (render @(::inputs element-state))
                     old-vdom (::vdom element-state)]
                 (when (not= vdom old-vdom)
-                  (let [[internals-map style-map markup]
+                  (let [[internals-map style-map content]
                         (if (map? vdom)
-                          (select-keys vdom [:internals :style :markup])
+                          [(or (:internals vdom) {}) (or (:style vdom) {}) (:content vdom)]
                           [{} {} vdom])
 
                         [old-internals-map old-style-map]
                         (if (map? old-vdom)
                           (select-keys old-vdom [:internals :style])
                           [{} {}])]
-                    (vdom/render! vdom-driver shadow (burp markup))
+                    (vdom/render! vdom-driver shadow (burp content))
                     (reconcile-internals! (::internals element-state)
                       internals-map old-internals-map)
                     (reconcile-style! (-> ^js (::style element-state) .-cssRules (aget 0) .-style)
