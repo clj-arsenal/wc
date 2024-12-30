@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "happy-dom": "^16.0.1",
+    "shadow-cljs": "^2.28.20"
+  }
+}
