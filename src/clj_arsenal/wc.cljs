@@ -78,8 +78,10 @@
             (fn [v]
               (let [!inputs (::inputs (oget (js* "this") state-prop-name))]
                 (swap! !inputs assoc input-key v)
-                nil))})
-      #(js-delete (.-prototype class) prop-name)))
+                nil))
+            
+            :configurable true})
+      #(js/Object.defineProperty (.-prototype class) prop-name #js{})))
   (-eis-attach-instance
     [pis element input-key]
     nil)
@@ -344,7 +346,9 @@
                  ::disconnecting false
                  ::cleanup-fns #js[]})
               (.add (::instances (oget component-class state-prop-name)) (js/WeakRef. this))
-              nil))})
+              nil))
+          
+          :configurable true})
     (js/Object.defineProperty
       (.-prototype component-class) reload-method-prop-name
       #js{:value
@@ -391,7 +395,9 @@
 
               (set! (.-adoptedStyleSheets shadow) styles)
               (invalidate! this))
-            nil)})
+            nil)
+          
+          :configurable true})
 
     (js/Object.defineProperty
       (.-prototype component-class) "connectedCallback"
@@ -408,14 +414,18 @@
                 (let [on-connect (some-> component-class-state ::opts :on-connect)]
                   (when (ifn? on-connect)
                     (on-connect @(::inputs instance-state) (::state instance-state))))))
-            nil)})
+            nil)
+          
+          :configurable true})
 
     (js/Object.defineProperty
       (.-prototype component-class) "disconnectedCallback"
       #js{:value
           (fn []
             (disconnecting! (js* "this"))
-            nil)})
+            nil)
+          
+          :configurable true})
 
     (js/Object.defineProperty
       (.-prototype component-class) "attributeChangedCallback"
@@ -428,7 +438,9 @@
                 (if (nil? attribute-value)
                   (swap! !attributes dissoc attribute-name)
                   (swap! !attributes assoc attribute-name (attribute-mapper attribute-value)))))
-            nil)})
+            nil)
+          
+          :configurable true})
 
     (js/Object.defineProperty
       component-class "observedAttributes"
@@ -436,13 +448,17 @@
           (fn []
             (let [attribute-readers
                   (some-> (oget component-class state-prop-name) ::attribute-readers)]
-              (to-array (keys attribute-readers))))})
+              (to-array (keys attribute-readers))))
+          
+          :configurable true})
 
     (js/Object.defineProperty
       component-class "formAssociated"
       #js{:get
           (fn []
-            (:form-associated (oget component-class state-prop-name)))})
+            (:form-associated (oget component-class state-prop-name)))
+          
+          :configurable true})
 
     (oset! component-class state-prop-name
       {::instances (js/Set.)
@@ -519,13 +535,13 @@
       (cond
         (map? prop-value)
         (js/Object.defineProperty (.-prototype element-class)
-          prop-name #js{:get (:get prop-value) :set (:set prop-value)})
+          prop-name #js{:get (:get prop-value) :set (:set prop-value) :configurable true})
 
         (fn? prop-value)
         (js/Object.defineProperty (.-prototype element-class)
-          prop-name #js{:value prop-value}))
+          prop-name #js{:get (constantly prop-value) :configurable true}))
 
-      (.push cleanup-fns #(js-delete (.-prototype element-class) prop-name)))
+      (.push cleanup-fns #(js/Object.defineProperty (.-prototype element-class) prop-name #js{})))
 
     (swap-state! element-class assoc ::opts opts)
 
