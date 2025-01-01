@@ -84,26 +84,46 @@
       #(js/Object.defineProperty (.-prototype class) prop-name #js{})))
   (-eis-attach-instance
     [pis element input-key]
-    nil)
+    (let [prop-name (or (.-prop-name pis) (name input-key))]
+      (when (js/Object.hasOwn element prop-name)
+        (let [v (oget element prop-name)]
+          (js-delete element prop-name)
+          (oset! element prop-name v)))
+      nil))
   
   AttrInputSource
   (-eis-attach-class
     [ais class input-key]
-    (let [attr-name (or (.-attr-name ais) (name input-key))
-          attr-reader (or (.-reader ais) identity)]
-      (swap-state! class assoc-in [::attribute-readers attr-name] attr-reader)
-      #(swap-state! class update ::attribute-readers dissoc attr-name)))
+    (let [attr-name (or (.-attr-name ais) (name input-key))]
+      (swap-state! class update ::observed-attributes conj attr-name)
+      #(swap-state! class update ::observed-attributes disj attr-name)))
   (-eis-attach-instance
     [ais element input-key]
     (let [{!inputs ::inputs !attributes ::attributes} (oget element state-prop-name)
+          attr-reader (or (.-reader ais) identity)
           watch-key (gensym)
-          attr-name (or (.-attr-name ais) (name input-key))]
-      (swap! !inputs assoc input-key (get @!attributes attr-name))
+          attr-name (or (.-attr-name ais) (name input-key))
+          attr-value (.getAttribute element attr-name)
+          input-value (some-> attr-value attr-reader)]
+
+      (if (nil? attr-value)
+        (do
+          (swap! !inputs dissoc attr-name)
+          (when (some? (get @!attributes attr-name))
+            (swap! !attributes dissoc attr-name)))
+        (do
+          (swap! !inputs assoc input-key input-value)
+          (when (not= attr-value (get @!attributes attr-name))
+            (swap! !attributes assoc attr-name attr-value))))
+
       (add-watch !attributes watch-key
         (fn [_ _ old-value new-value]
-          (let [attr-value (get new-value attr-name)]
+          (let [new-attr-value (get new-value attr-name)]
             (when (not= attr-value (get old-value attr-name))
-              (swap! !inputs assoc input-key attr-value)))))
+              (if (nil? new-attr-value)
+                (swap! !inputs dissoc input-key)
+                (swap! !inputs assoc input-key (some-> new-attr-value attr-reader)))))))
+
       #(remove-watch !attributes watch-key)))
   
   StateInputSource
@@ -381,11 +401,6 @@
               (doseq [cleanup-fn cleanup-fns]
                 (cleanup-fn))
               (.splice cleanup-fns 0)
-              (doseq [[attribute-name attribute-reader] (::attribute-readers class-state)
-                      :let [attribute-value (.getAttribute this attribute-name)]]
-                (if (nil? attribute-value)
-                  (swap! !attributes dissoc attribute-name)
-                  (swap! !attributes assoc attribute-name (attribute-reader attribute-value))))
               (when (and (= ::self (:focus opts)) (neg? (.-tabIndex this)))
                 (set! (.-tabIndex this) 0))
               (doseq [[k v] (:inputs opts)]
@@ -431,13 +446,10 @@
       (.-prototype component-class) "attributeChangedCallback"
       #js{:value
           (fn [attribute-name _ attribute-value]
-            (when-some [attribute-mapper
-                        (some-> (oget component-class state-prop-name)
-                          ::attribute-readers (get attribute-name))]
-              (let [!attributes (::attributes (oget (js* "this") state-prop-name))]
+            (let [!attributes (::attributes (oget (js* "this") state-prop-name))]
                 (if (nil? attribute-value)
                   (swap! !attributes dissoc attribute-name)
-                  (swap! !attributes assoc attribute-name (attribute-mapper attribute-value)))))
+                  (swap! !attributes assoc attribute-name attribute-value)))
             nil)
           
           :configurable true})
@@ -446,9 +458,7 @@
       component-class "observedAttributes"
       #js{:get
           (fn []
-            (let [attribute-readers
-                  (some-> (oget component-class state-prop-name) ::attribute-readers)]
-              (to-array (keys attribute-readers))))
+            (some-> (oget component-class state-prop-name) ::observed-attributes to-array))
           
           :configurable true})
 
@@ -464,7 +474,7 @@
       {::instances (js/Set.)
        ::window *window*
        ::component-name component-name
-       ::attribute-readers {}
+       ::observed-attributes #{}
        ::cleanup-fns #js[]})
     (ensure-window-init! *window*)
     (.add ^js/Set (::component-classes (oget *window* state-prop-name)) (js/WeakRef. component-class))
