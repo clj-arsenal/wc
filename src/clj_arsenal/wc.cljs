@@ -108,7 +108,7 @@
 
       (if (nil? attr-value)
         (do
-          (swap! !inputs dissoc attr-name)
+          (swap! !inputs dissoc input-key)
           (when (some? (get @!attributes attr-name))
             (swap! !attributes dissoc attr-name)))
         (do
@@ -119,7 +119,7 @@
       (add-watch !attributes watch-key
         (fn [_ _ old-value new-value]
           (let [new-attr-value (get new-value attr-name)]
-            (when (not= attr-value (get old-value attr-name))
+            (when (not= new-attr-value (get old-value attr-name))
               (if (nil? new-attr-value)
                 (swap! !inputs dissoc input-key)
                 (swap! !inputs assoc input-key (some-> new-attr-value attr-reader)))))))
@@ -379,7 +379,6 @@
                   instance-state (oget this state-prop-name)
                   shadow ^js/ShadowRoot (::shadow instance-state)
                   cleanup-fns ^js (::cleanup-fns instance-state)
-                  !attributes (::attributes instance-state)
                   styles (to-array
                            (concat
                              (keep
