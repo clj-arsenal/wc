@@ -306,7 +306,7 @@
     nil))
 
 (defn create-component-class
-  [component-name element-name opts]
+  [component-name opts]
   (let [component-class
         (js* "(class extends ~{} {
                   constructor() {
@@ -579,20 +579,24 @@ Map of input names to sources.
       (update-component-class! existing-class component-name opts)
       
       :else
-      (let [component-class (create-component-class component-name element-name opts)]
+      (let [component-class (create-component-class component-name opts)]
         (update-component-class! component-class component-name opts)
         (.define (.-customElements *window*) element-name component-class))))
   nil)
 
 
-(defn after-reconcile-sig
-  ([] (after-reconcile-sig *window*))
+(defn after-reconcile-sig "
+Returns a signal which will be called after every reconciliation
+for the given window; or `*window*` if no explicit window is given.
+" ([] (after-reconcile-sig *window*))
   ([^js/Window win]
    (ensure-window-init! win)
    (::after-reconcile-sig (oget win state-prop-name))))
 
-(defn before-reconcile-sig
-  ([] (before-reconcile-sig *window*))
+(defn before-reconcile-sig "
+Returns a signal which will be called before every reconciliation
+for the given window; or `*window*` if no explicit window is given.
+" ([] (before-reconcile-sig *window*))
   ([^js/Window win]
    (ensure-window-init! win)
    (::before-reconcile-sig (oget win state-prop-name))))
