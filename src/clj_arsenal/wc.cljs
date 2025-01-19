@@ -233,7 +233,7 @@
 
                         [old-internals-map old-style-map]
                         (if (map? old-vdom)
-                          (select-keys old-vdom [:internals :style])
+                          [(or (:internals old-vdom) {}) (or (:style old-vdom) {})]
                           [{} {}])]
                     (vdom/render! vdom-driver shadow (burp content))
                     (reconcile-internals! (::internals element-state)
@@ -245,7 +245,8 @@
               (on-update @!inputs !state))
             (catch :default ex
               (.push errors ex))))))
-    (doseq [ex errors] (log :error :ex ex)))
+    (doseq [ex errors]
+      (log :error :ex ex)))
   nil)
 
 (defn- ensure-window-init!
@@ -600,3 +601,11 @@ for the given window; or `*window*` if no explicit window is given.
   ([^js/Window win]
    (ensure-window-init! win)
    (::before-reconcile-sig (oget win state-prop-name))))
+
+(defn element-state
+  [^js/Element element]
+  (some-> element (oget state-prop-name) ::state))
+
+(defn host-state
+  [^js/Node node]
+  (some-> node .getRootNode .-host element-state))
