@@ -43,7 +43,7 @@
 
 (def err-invalid-custom-property
   (error-fn ::invalid-custom-property
-    "invalid custom property, key must be a keyword, value must be a :get/:set map or a function"))
+    "invalid custom property, key must be a keyword or JS Symbol, value must be a :get/:set map or a function"))
 
 (def err-invalid-input
   (error-fn ::invalid-input
@@ -219,9 +219,11 @@
                       !inputs (::inputs element-state)
                       !state (::state element-state)
                       shadow (::shadow element-state)
-                      {:keys [render on-update]} component-opts]]
-          (swap-state! element assoc ::dirty false)
+                      {:keys [render on-update on-change]} component-opts]]
           (try
+            (when (ifn? on-change)
+            (on-change @!inputs !state))
+          
             (when (ifn? render)
               (let [vdom (render @(::inputs element-state))
                     old-vdom (::vdom element-state)]
@@ -244,7 +246,9 @@
             (when (ifn? on-update)
               (on-update @!inputs !state))
             (catch :default ex
-              (.push errors ex))))))
+              (.push errors ex))
+            (finally
+              (swap-state! element assoc ::dirty false))))))
     (doseq [ex errors]
       (log :error :ex ex)))
   nil)
@@ -346,7 +350,7 @@
                   !state (when-some [state (:state opts)]
                            (cond
                              (ifn? state)
-                             (state this)
+                             (state this internals)
 
                              (and (satisfies? IWatchable state) (satisfies? IDeref state))
                              state
@@ -519,7 +523,10 @@
       (doseq [[prop-name prop-value :as entry] custom-props]
         (cond
           (not
-            (and (keyword? prop-name)
+            (and
+              (or
+                (keyword? prop-name)
+                (= "symbol" (js* "typeof(~{})" prop-name)))
               (or
                 (and (map? prop-value) (seq (select-keys prop-value [:get :set])))
                 (fn? prop-value))))
@@ -541,7 +548,7 @@
 
     ;; custom properties
     (doseq [[prop-key prop-value] (:props opts)
-            :let [prop-name (name prop-key)]]
+            :let [prop-name (cond-> prop-key (keyword? prop-key) name)]]
       (cond
         (map? prop-value)
         (js/Object.defineProperty (.-prototype element-class)
