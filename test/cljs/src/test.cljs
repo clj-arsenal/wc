@@ -4,39 +4,32 @@
    [clj-arsenal.vdom :as vdom]
    [clj-arsenal.vdom.browser :as browser-vdom]
    [clj-arsenal.burp :refer [burp]]
-   [clj-arsenal.check :refer [check samp expect when-check]]
-   [clj-arsenal.basis.protocols.chain :refer [chain chainable]]
-   [clj-arsenal.basis :refer [sig-listen sig-unlisten error?]]
+   [clj-arsenal.check :refer [check samp expect when-check] :as check]
+   [clj-arsenal.basis :as b]
    ["happy-dom" :as happy-dom]))
-
-(comment
-  (require 'shadow.cljs.devtools.api)
-  (shadow.cljs.devtools.api/repl :dev))
-
-(when-check
-  (print "Checking..."))
 
 (defn- steps*
   [^js/Window win steps]
-  (chainable
+  (b/chainable
     (fn [continue]
       (if (empty? steps)
-        (-> win .-happyDOM .waitUntilComplete
-          (.then
-            (fn []
-              (-> win .-happyDOM .close)
-              (continue nil))))
+        (do
+          (continue nil)
+          (-> win .-happyDOM .waitUntilComplete
+            (.then
+              (fn []
+                (-> win .-happyDOM .close)))))
         (try
           (binding [wc/*window* win]
-            (chain ((first steps) (.-document win))
+            (b/chain ((first steps) (.-document win))
               (fn [x]
-                (if (error? x)
+                (if (b/err? x)
                   (continue x)
                   (let [after-reconcile-sig (wc/after-reconcile-sig)]
-                    (sig-listen after-reconcile-sig
+                    (b/notifier-listen after-reconcile-sig
                       (fn listener []
-                        (sig-unlisten after-reconcile-sig listener)
-                        (chain (steps* win (rest steps)) continue))))))))
+                        (b/notifier-unlisten after-reconcile-sig listener)
+                        (b/chain (steps* win (rest steps)) continue))))))))
           (catch :default ex
             (continue ex)))))))
 
@@ -198,4 +191,4 @@
 
 (defn run
   []
-  nil)
+  (check/report-all-checks-and-exit!))

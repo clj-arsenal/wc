@@ -4,9 +4,8 @@
    [clj-arsenal.vdom :as vdom]
    [clj-arsenal.burp :refer [burp]]
    [clj-arsenal.log :refer [log spy]]
-   [clj-arsenal.basis :refer [signal]]
-   [clj-arsenal.basis.errors :refer [error-fn]]
-   [clj-arsenal.basis.protocols.path-watchable :refer [PathWatchable path-watch path-unwatch]]))
+   [clj-arsenal.basis :refer [signal] :as b]
+   [clj-arsenal.basis.protocols.path-watchable :refer [PathWatchable]]))
 
 (defn- oget
   ^js [^js obj k]
@@ -20,6 +19,11 @@
 (defonce ^:private init-method-prop-name (js/Symbol "cljArsenalWcInit"))
 (defonce ^:private reload-method-prop-name (js/Symbol "cljArsenalWcReload"))
 (defonce ^:private state-prop-name (js/Symbol "cljArsenalState"))
+
+(defn error-fn
+  [p msg]
+  (fn [& {:as data}]
+    (b/err (assoc data :p p :msg msg))))
 
 (def err-invalid-opt
   (error-fn ::invalid-opt
@@ -137,11 +141,11 @@
       (cond
         (satisfies? PathWatchable !state)
         (let [watch-key (gensym)]
-          (path-watch !state watch-key (:path sis)
+          (b/path-watch !state watch-key (:path sis)
             (fn [old-val new-val]
               (when (not= old-val new-val)
                 (swap! !inputs assoc input-key new-val))))
-          #(path-unwatch !state watch-key))
+          #(b/path-unwatch !state watch-key))
         
         (satisfies? IWatchable !state)
         (let [watch-key (gensym)]
