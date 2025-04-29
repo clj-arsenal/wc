@@ -2,7 +2,7 @@
   (:require
    [clj-arsenal.vdom.browser :refer [node-type-keyword->element-name] :as browser-vdom]
    [clj-arsenal.vdom :as vdom]
-   [clj-arsenal.burp :refer [burp]]
+   [clj-arsenal.burp :as burp]
    [clj-arsenal.log :refer [log spy]]
    [clj-arsenal.basis :refer [signal] :as b]
    [clj-arsenal.basis.protocols.path-watchable :refer [PathWatchable]]))
@@ -216,36 +216,45 @@
     (while (pos? (.-size dirty))
       (let [elements (-> dirty .values es6-iterator-seq doall)]
         (.clear dirty)
-        (doseq [^js/HTMLElement element elements
-                :let [element-state (oget element state-prop-name)
-                      class-state (oget (.-constructor element) state-prop-name)
-                      component-opts (::opts class-state)
-                      !inputs (::inputs element-state)
-                      !state (::state element-state)
-                      shadow (::shadow element-state)
-                      {:keys [render on-update on-change]} component-opts]]
+        (doseq
+          [^js/HTMLElement element elements
+
+           :let
+           [element-state (oget element state-prop-name)
+            class-state (oget (.-constructor element) state-prop-name)
+            component-opts (::opts class-state)
+            !inputs (::inputs element-state)
+            !state (::state element-state)
+            shadow (::shadow element-state)
+            {:keys [render on-update on-change]} component-opts]]
           (try
             (when (ifn? on-change)
-            (on-change @!inputs !state))
-          
-            (when (ifn? render)
-              (let [vdom (render @(::inputs element-state))
-                    old-vdom (::vdom element-state)]
-                (when (not= vdom old-vdom)
-                  (let [[internals-map style-map content]
-                        (if (map? vdom)
-                          [(or (:internals vdom) {}) (or (:style vdom) {}) (:content vdom)]
-                          [{} {} vdom])
+              (on-change @!inputs !state))
 
-                        [old-internals-map old-style-map]
-                        (if (map? old-vdom)
-                          [(or (:internals old-vdom) {}) (or (:style old-vdom) {})]
-                          [{} {}])]
-                    (vdom/render! vdom-driver shadow (burp content))
-                    (reconcile-internals! (::internals element-state)
+            (when (and shadow (ifn? render))
+              (let
+                [vdom (render @(::inputs element-state))
+                 old-vdom (::vdom element-state)]
+                (when (not= vdom old-vdom)
+                  (let
+                    [[internals-map style-map content]
+                     (if (and (burp/element? vdom) (= ::root (get-in vdom [:key :operator])))
+                       [(or (get-in vdom [:props :internals]) {})
+                        (or (get-in vdom [:props :style]) {})
+                        (:body vdom)]
+                       [{} {} vdom])
+
+                     [old-internals-map old-style-map]
+                     (if (map? old-vdom)
+                       [(or (:internals old-vdom) {}) (or (:style old-vdom) {})]
+                       [{} {}])]
+                    (vdom/render! vdom-driver shadow content)
+                    (reconcile-internals!
+                      (::internals element-state)
                       internals-map old-internals-map)
-                    (reconcile-style! (-> ^js (::style element-state) .-cssRules (aget 0) .-style)
-                       style-map old-style-map)
+                    (reconcile-style!
+                      (-> ^js (::style element-state) .-cssRules (aget 0) .-style)
+                      style-map old-style-map)
                     (swap-state! element assoc ::vdom vdom)))))
             (when (ifn? on-update)
               (on-update @!inputs !state))
@@ -340,9 +349,10 @@
                     (.replaceSync ":host {}"))
 
                   shadow
-                  (.attachShadow this
-                    #js{:mode "open"
-                        :delegatesFocus (= (:focus opts) ::delegate)})
+                  (when (ifn? (:render opts))
+                    (.attachShadow this
+                     #js{:mode "open"
+                         :delegatesFocus (= (:focus opts) ::delegate)}))
 
                   internals
                   (when (fn? (.-attachInternals this))
@@ -416,7 +426,8 @@
                   (when (ifn? cleanup-fn)
                     (.push cleanup-fns cleanup-fn))))
 
-              (set! (.-adoptedStyleSheets shadow) styles)
+              (when shadow
+                (set! (.-adoptedStyleSheets shadow) styles))
               (invalidate! this))
             nil)
           
