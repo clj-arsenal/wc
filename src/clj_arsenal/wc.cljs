@@ -59,8 +59,9 @@
   nil)
 
 (defprotocol ComponentInputSource
-  (-eis-attach-instance [eis element input-key])
-  (-eis-attach-class [eis class input-key]))
+  (-cis-attach-instance [cis element input-key])
+  (-cis-instance-connected [cis element input-key])
+  (-cis-attach-class [cis class input-key]))
 
 (defrecord ^:no-doc PropInputSource [prop-name])
 (defrecord ^:no-doc AttrInputSource [attr-name reader])
@@ -68,7 +69,7 @@
 
 (extend-protocol ComponentInputSource
   PropInputSource
-  (-eis-attach-class
+  (-cis-attach-class
     [pis class input-key]
     (let [prop-name (or (.-prop-name pis) (name input-key))]
       (js/Object.defineProperty (.-prototype class)
@@ -86,7 +87,7 @@
             
             :configurable true})
       #(js/Object.defineProperty (.-prototype class) prop-name #js{})))
-  (-eis-attach-instance
+  (-cis-attach-instance
     [pis element input-key]
     (let [prop-name (or (.-prop-name pis) (name input-key))]
       (when (js/Object.hasOwn element prop-name)
@@ -94,14 +95,17 @@
           (js-delete element prop-name)
           (oset! element prop-name v)))
       nil))
-  
+  (-cis-instance-connected
+    [_ _ _]
+    nil)
+
   AttrInputSource
-  (-eis-attach-class
+  (-cis-attach-class
     [ais class input-key]
     (let [attr-name (or (.-attr-name ais) (name input-key))]
       (swap-state! class update ::observed-attributes conj attr-name)
       #(swap-state! class update ::observed-attributes disj attr-name)))
-  (-eis-attach-instance
+  (-cis-attach-instance
     [ais element input-key]
     (let [{!inputs ::inputs !attributes ::attributes} (oget element state-prop-name)
           attr-reader (or (.-reader ais) identity)
@@ -129,12 +133,15 @@
                 (swap! !inputs assoc input-key (some-> new-attr-value attr-reader)))))))
 
       #(remove-watch !attributes watch-key)))
-  
+  (-cis-instance-connected
+    [_ _ _]
+    nil)
+
   StateInputSource
-  (-eis-attach-class
+  (-cis-attach-class
     [sis class input-key]
     nil)
-  (-eis-attach-instance
+  (-cis-attach-instance
     [sis element input-key]
     (when-some [{!state ::state !inputs ::inputs} (oget element state-prop-name)]
       (swap! !inputs assoc input-key (get-in @!state (:path sis)))
@@ -154,7 +161,10 @@
               (let [path-val (get-in new-val (:path sis))]
                 (when (not= path-val (get-in old-val (:path sis)))
                   (swap! !inputs assoc input-key path-val)))))
-          #(remove-watch !state watch-key))))))
+          #(remove-watch !state watch-key)))))
+  (-cis-instance-connected
+    [_ _ _]
+    nil))
 
 (defn prop-in
   [& {:keys [name]}]
@@ -195,23 +205,23 @@
 
 (defn- reconcile!
   [^js/Window window]
-  (let [{^js/Set disconnecting ::disconnecting
-         ^js/Set dirty ::dirty
-         vdom-driver ::vdom-driver} (oget window state-prop-name)
-        errors #js[]]
+  (let
+    [{^js/Set disconnecting ::disconnecting
+      ^js/Set dirty ::dirty
+      vdom-driver ::vdom-driver}
+     (oget window state-prop-name)
+
+     errors #js[]]
     (while (pos? (.-size disconnecting))
       (let [elements (-> disconnecting .values es6-iterator-seq doall)]
         (.clear disconnecting)
-        (doseq [element elements
-                :let [component-class-state (oget (.-constructor element) state-prop-name)
-                      {!inputs ::inputs !state ::state} (oget element state-prop-name)
-                      on-disconnect (:on-disconnect (::opts component-class-state))]
-                :when (ifn? on-disconnect)]
-          (swap-state! element assoc ::disconnecting false)
-          (try
-            (on-disconnect @!inputs !state)
-            (catch :default ex
-              (.push errors ex))))))
+        (doseq
+          [element elements
+
+           :let
+           [connection-aborter
+            (:connection-aborter (oget element state-prop-name))]]
+          (.abort connection-aborter))))
     
     (while (pos? (.-size dirty))
       (let [elements (-> dirty .values es6-iterator-seq doall)]
@@ -223,17 +233,16 @@
            [element-state (oget element state-prop-name)
             class-state (oget (.-constructor element) state-prop-name)
             component-opts (::opts class-state)
-            !inputs (::inputs element-state)
-            !state (::state element-state)
+            {!inputs ::inputs !state ::state hook-context ::hook-context} element-state
             shadow (::shadow element-state)
             {:keys [render on-update on-change]} component-opts]]
           (try
             (when (ifn? on-change)
-              (on-change @!inputs !state))
+              (on-change @!inputs !state hook-context))
 
             (when (and shadow (ifn? render))
               (let
-                [vdom (render @(::inputs element-state))
+                [vdom (render @!inputs !state hook-context)
                  old-vdom (::vdom element-state)]
                 (when (not= vdom old-vdom)
                   (let
@@ -257,7 +266,7 @@
                       style-map old-style-map)
                     (swap-state! element assoc ::vdom vdom)))))
             (when (ifn? on-update)
-              (on-update @!inputs !state))
+              (on-update @!inputs !state hook-context))
             (catch :default ex
               (.push errors ex))
             (finally
@@ -325,52 +334,56 @@
 
 (defn create-component-class
   [component-name opts]
-  (let [component-class
-        (js* "(class extends ~{} {
-                  constructor() {
-                      super();
-                      this[~{}]();
-                      this[~{}]();
-                  }
-              })"
-          (.-HTMLElement *window*)
-          init-method-prop-name
-          reload-method-prop-name)
-        
-        CSSStyleSheet (.-CSSStyleSheet *window*)]
+  (let
+    [component-class
+     (js* "(class extends ~{} {
+            constructor() {
+                super();
+                this[~{}]();
+                this[~{}]();
+            }
+          })"
+       (.-HTMLElement *window*)
+       init-method-prop-name
+       reload-method-prop-name)
+
+     CSSStyleSheet (.-CSSStyleSheet *window*)]
     (js/Object.defineProperty
       (.-prototype component-class) init-method-prop-name
       #js{:value
           (fn []
-            (let [this ^js/HTMLElement (js* "this")
+            (let
+              [this ^js/HTMLElement (js* "this")
 
-                  style
-                  (doto (CSSStyleSheet.)
-                    (.replaceSync ":host {}"))
+               style
+               (doto (CSSStyleSheet.)
+                 (.replaceSync ":host {}"))
 
-                  shadow
-                  (when (ifn? (:render opts))
-                    (.attachShadow this
-                     #js{:mode "open"
-                         :delegatesFocus (= (:focus opts) ::delegate)}))
+               shadow
+               (when (ifn? (:render opts))
+                 (.attachShadow this
+                   #js{:mode "open"
+                       :delegatesFocus (= (:focus opts) ::delegate)}))
 
-                  internals
-                  (when (fn? (.-attachInternals this))
-                    (.attachInternals this))
+               internals
+               (when (fn? (.-attachInternals this))
+                 (.attachInternals this))
 
-                  !inputs (atom {})
-                  !attributes (atom {})
+               !inputs (atom {})
+               !attributes (atom {})
+               hook-context {:internals internals :root shadow :host this}
 
-                  !state (when-some [state (:state opts)]
-                           (cond
-                             (ifn? state)
-                             (state this internals)
+               !state
+               (when-some [state (:state opts)]
+                 (cond
+                   (ifn? state)
+                   (state hook-context)
 
-                             (and (satisfies? IWatchable state) (satisfies? IDeref state))
-                             state
+                   (and (satisfies? IWatchable state) (satisfies? IDeref state))
+                   state
 
-                             :else
-                             (throw (err-invalid-opt ::option :state))))]
+                   :else
+                   (throw (err-invalid-opt ::option :state))))]
 
               (add-watch !inputs ::update #(invalidate! this))
 
@@ -382,6 +395,7 @@
                  ::attributes !attributes
                  ::state !state
                  ::dirty false
+                 ::hook-context hook-context
                  ::disconnecting false
                  ::cleanup-fns #js[]})
               (.add (::instances (oget component-class state-prop-name)) (js/WeakRef. this))
@@ -392,37 +406,40 @@
       (.-prototype component-class) reload-method-prop-name
       #js{:value
           (fn []
-            (let [this ^js/HTMLElement (js* "this")
-                  class-state (oget (.-constructor this) state-prop-name)
-                  opts (::opts class-state)
-                  instance-state (oget this state-prop-name)
-                  shadow ^js/ShadowRoot (::shadow instance-state)
-                  cleanup-fns ^js (::cleanup-fns instance-state)
-                  styles (to-array
-                           (concat
-                             (keep
-                               (fn [style-val]
-                                 (cond
-                                   (string? style-val)
-                                   (doto (CSSStyleSheet.)
-                                     (.replaceSync style-val))
+            (let
+              [this ^js/HTMLElement (js* "this")
+               class-state (oget (.-constructor this) state-prop-name)
+               opts (::opts class-state)
+               instance-state (oget this state-prop-name)
+               shadow ^js/ShadowRoot (::shadow instance-state)
+               cleanup-fns ^js (::cleanup-fns instance-state)
 
-                                   (instance? CSSStyleSheet style-val)
-                                   style-val))
-                               (cond
-                                 (string? (:style opts))
-                                 [(:style opts)]
+               styles
+               (to-array
+                 (concat
+                   (keep
+                     (fn [style-val]
+                       (cond
+                         (string? style-val)
+                         (doto (CSSStyleSheet.)
+                           (.replaceSync style-val))
 
-                                 (sequential? (:style opts))
-                                 (:style opts)))
-                             [(::style instance-state)]))]
+                         (instance? CSSStyleSheet style-val)
+                         style-val))
+                     (cond
+                       (string? (:style opts))
+                       [(:style opts)]
+
+                       (sequential? (:style opts))
+                       (:style opts)))
+                   [(::style instance-state)]))]
               (doseq [cleanup-fn cleanup-fns]
                 (cleanup-fn))
               (.splice cleanup-fns 0)
               (when (and (= ::self (:focus opts)) (neg? (.-tabIndex this)))
                 (set! (.-tabIndex this) 0))
               (doseq [[k v] (:inputs opts)]
-                (when-some [cleanup-fn (-eis-attach-instance v this k)]
+                (when-some [cleanup-fn (-cis-attach-instance v this k)]
                   (when (ifn? cleanup-fn)
                     (.push cleanup-fns cleanup-fn))))
 
@@ -439,15 +456,29 @@
           (fn []
             (let [component-class-state (oget component-class state-prop-name)
                   instance (js* "this")
-                  instance-state (oget instance state-prop-name)]
+                  instance-state (oget instance state-prop-name)
+                  {hook-context ::hook-context !inputs ::inputs} instance-state]
               (cond
                 (::disconnecting instance-state)
                 (cancel-disconnect! instance)
 
                 :else
-                (let [on-connect (some-> component-class-state ::opts :on-connect)]
+                (let
+                  [{:keys [on-connect on-disconnect]} (some-> component-class-state ::opts)
+                   connection-aborter (js/AbortController.)]
+                  (swap-state! instance assoc :connection-aborter connection-aborter)
+                  (.addEventListener (.-signal connection-aborter) "abort"
+                    (fn []
+                      (swap-state! instance assoc ::disconnecting false)
+                      (on-disconnect @!inputs (::state instance-state) hook-context)))
+                  (doseq
+                    [[k v] (:inputs opts)]
+                    (when-some
+                      [cleanup-fn (-cis-instance-connected v instance k)]
+                      (when (ifn? cleanup-fn)
+                        (.addEventListener (.-signal connection-aborter) "abort" #(cleanup-fn)))))
                   (when (ifn? on-connect)
-                    (on-connect @(::inputs instance-state) (::state instance-state))))))
+                    (on-connect @!inputs (::state instance-state) hook-context)))))
             nil)
           
           :configurable true})
@@ -557,7 +588,7 @@
 
     ;; attach inputs
     (doseq [[input-key input-source] (:inputs opts)
-            :let [cleanup-fn (-eis-attach-class input-source element-class input-key)]]
+            :let [cleanup-fn (-cis-attach-class input-source element-class input-key)]]
       (when (ifn? cleanup-fn)
         (.push cleanup-fns cleanup-fn)))
 
@@ -566,8 +597,14 @@
             :let [prop-name (cond-> prop-key (keyword? prop-key) name)]]
       (cond
         (map? prop-value)
-        (js/Object.defineProperty (.-prototype element-class)
-          prop-name #js{:get (:get prop-value) :set (:set prop-value) :configurable true})
+        (let
+          [{:keys [get set]} prop-value
+           obj #js{:configurable true}]
+          (cond-> obj
+            get (oset! "get" get)
+            set (oset! "set" set))
+          (js/Object.defineProperty (.-prototype element-class)
+            prop-name obj))
 
         (fn? prop-value)
         (js/Object.defineProperty (.-prototype element-class)
@@ -627,6 +664,10 @@ for the given window; or `*window*` if no explicit window is given.
 (defn element-state
   [^js/Element element]
   (some-> element (oget state-prop-name) ::state))
+
+(defn element-inputs
+  [^js/Element element]
+  (some-> element (oget state-prop-name) ::state deref ::inputs))
 
 (defn host-state
   [^js/Node node]
