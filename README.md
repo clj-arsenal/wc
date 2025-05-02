@@ -1,3 +1,6 @@
+> [!WARNING]
+> Unstable/WIP; avoid using.
+
 Build web components with a declarative react-like vDOM rendering
 system.
 
@@ -5,7 +8,7 @@ system.
 (ns example)
 
 (require '[clj-arsenal.wc :as wc])
-(require '[clj-arsenal.burp :refer [burp]])
+(require '[clj-arsenal.burp :refer [$]])
 
 (wc/define ::my-component
  :inputs
@@ -45,9 +48,9 @@ system.
    ;; component will have a ShadowRoot attached, to which the vDOM
    ;; markup from this function will be rendered.
   (let [foo (or foo foo-attr)]
-   (burp
-    [:div "foo: " foo]
-    [:div "bar: " bar]))))
+   (list
+    ($ :div "foo: " foo)
+    ($ :div "bar: " bar)))))
 ```
 
 ```html
