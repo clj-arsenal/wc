@@ -470,7 +470,8 @@
                   (.addEventListener (.-signal connection-aborter) "abort"
                     (fn []
                       (swap-state! instance assoc ::disconnecting false)
-                      (on-disconnect @!inputs (::state instance-state) hook-context)))
+                      (when (ifn? on-disconnect)
+                        (on-disconnect @!inputs (::state instance-state) hook-context))))
                   (doseq
                     [[k v] (:inputs opts)]
                     (when-some
